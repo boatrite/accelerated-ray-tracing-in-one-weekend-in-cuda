@@ -49,9 +49,11 @@ __global__ void render_init(int max_x, int max_y, curandState *rand_state) {
 }
 
 __device__ void write_color(vec3 *fb, int pixel_index, color pixel_color, int samples_per_pixel) {
-  // Divide the color by the number of samples
+  // Divide the color by the number of samples and gamma correct for gamma=2.0.
   auto scale = 1.0f / samples_per_pixel;
-  pixel_color *= scale;
+  pixel_color.e[0] = sqrt(pixel_color.r() * scale);
+  pixel_color.e[1] = sqrt(pixel_color.g() * scale);
+  pixel_color.e[2] = sqrt(pixel_color.b() * scale);
 
   fb[pixel_index] = pixel_color;
 }
