@@ -86,8 +86,10 @@ __global__ void create_world(hittable **d_list, hittable **d_world, const float 
   if (threadIdx.x == 0 && blockIdx.x == 0) {
     d_list[0] = new sphere(vec3(0,0,-1), 0.5, new lambertian(color(0.8, 0.3, 0.3)));
     d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(color(0.8, 0.8, 0.0)));
+    d_list[2] = new sphere(vec3(-1,0,-1), 0.5, new metal(color(0.8, 0.8, 0.8), 0));
+    d_list[3] = new sphere(vec3(1,0,-1), 0.5, new metal(color(0.8, 0.6, 0.2), 0));
 
-    *d_world = new hittable_list(d_list, 2);
+    *d_world = new hittable_list(d_list, 4);
 
     point3 lookfrom(13, 2, 3);
     point3 lookat(0,0,0);
