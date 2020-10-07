@@ -26,7 +26,7 @@ __device__ vec3 ray_color(const ray& r, hittable **world, curandState *rand_stat
   for (int i = 0; i < 50; i++) {
     hit_record rec;
     if ((*world)->hit(cur_ray, 0.001f, infinity, rec)) {
-      point3 target = rec.p + rec.normal + random_in_unit_sphere(rand_state);
+      point3 target = rec.p + rec.normal + random_unit_vector(rand_state);
       cur_attenuation *= 0.5f;
       cur_ray = ray(rec.p, target-rec.p);
     } else {
