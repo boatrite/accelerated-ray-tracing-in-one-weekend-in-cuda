@@ -59,8 +59,8 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, ve
   for (int s = 0; s < samples_per_pixel; ++s) {
     float u = float(i + random_float(&local_rand_state)) / float(max_x-1);
     float v = float(j + random_float(&local_rand_state)) / float(max_y-1);
-    ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
-    // ray r = (*cam)->get_ray(u, v, rand_state);
+    // ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
+    ray r = (*cam)->get_ray(u, v, &local_rand_state);
     pixel_color += ray_color(r, world);
   }
 
