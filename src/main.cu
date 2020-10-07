@@ -2,6 +2,9 @@
 #include <time.h>
 
 #include "common.cuh"
+#include "hittable.cuh"
+#include "hittable_list.cuh"
+#include "sphere.cuh"
 
 #define checkCudaErrors(val) check_cuda( (val), #val, __FILE__, __LINE__ )
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line) {
@@ -14,31 +17,18 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
   }
 }
 
-__device__ float hit_sphere(const point3& center, double radius, const ray& r) {
-  vec3 oc = r.origin() - center;
-  auto a = r.direction().length_squared();
-  auto half_b = dot(oc, r.direction());
-  auto c = oc.length_squared() - radius*radius;
-  auto disc = half_b*half_b - a*c;
-  if (disc < 0) {
-    return -1.0f;
-  } else {
-    return (-half_b - sqrt(disc)) / a;
+__device__ vec3 ray_color(const ray& r, hittable **world) {
+  hit_record rec;
+  if ((*world)->hit(r, 0, infinity, rec)) {
+    return 0.5f * (rec.normal + color(1,1,1));
   }
-}
 
-__device__ vec3 ray_color(const ray& r) {
-  float t = hit_sphere(point3(0, 0, -1), 0.5, r);
-  if (t > 0.0) {
-    vec3 N = unit_vector(r.at(t) - vec3(0,0,-1));
-    return 0.5f * color(N.x()+1, N.y()+1, N.z()+1);
-  }
   vec3 unit_direction = unit_vector(r.direction());
-  t = 0.5f * (unit_direction.y() + 1.0f);
+  auto t = 0.5f * (unit_direction.y() + 1.0f);
   return (1.0f - t)*color(1.0, 1.0, 1.0) + t*color(0.5, 0.7, 1.0);
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin) {
+__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin, hittable **world) {
   int i = threadIdx.x + blockIdx.x * blockDim.x;
   int j = threadIdx.y + blockIdx.y * blockDim.y;
   if((i >= max_x) || (j >= max_y)) return;
@@ -47,7 +37,21 @@ __global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, v
   float u = float(i) / float(max_x);
   float v = float(j) / float(max_y);
   ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
-  fb[pixel_index] = ray_color(r);
+  fb[pixel_index] = ray_color(r, world);
+}
+
+__global__ void create_world(hittable **d_list, hittable **d_world) {
+  if (threadIdx.x == 0 && blockIdx.x == 0) {
+    *(d_list)   = new sphere(vec3(0,0,-1), 0.5);
+    *(d_list+1) = new sphere(vec3(0,-100.5,-1), 100);
+    *d_world    = new hittable_list(d_list, 2);
+  }
+}
+
+__global__ void free_world(hittable **d_list, hittable **d_world) {
+  delete *(d_list);
+  delete *(d_list+1);
+  delete *d_world;
 }
 
 int main() {
@@ -66,6 +70,12 @@ int main() {
   auto vertical = vec3(0.0f, viewport_height, 0.0f);
   auto lower_left_corner = origin - horizontal/2.0f - vertical/2.0f - vec3(0.0f, 0.0f, focal_length);
 
+  // World
+  // hittable_list world;
+  // world.add(make_shared<sphere>(point3(0, 0, -1), 0.5));
+  // world.add(make_shared<sphere>(point3(0, -100.5, -1), 100));
+  shared_ptr<sphere> my_sphere = make_shared<sphere>(point3(0, 0, -1), 0.5);
+
   int tx = 8;
   int ty = 8;
 
@@ -79,12 +89,20 @@ int main() {
   vec3 *fb;
   checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
+  hittable **d_list;
+  checkCudaErrors(cudaMalloc((void **)&d_list, 2*sizeof(hittable *)));
+  hittable **d_world;
+  checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
+  create_world<<<1,1>>>(d_list, d_world);
+  checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaDeviceSynchronize());
+
   clock_t start, stop;
   start = clock();
   // Render our buffer
   dim3 blocks(image_width/tx+1,image_height/ty+1);
   dim3 threads(tx,ty);
-  render <<<blocks, threads>>>(fb, image_width, image_height, lower_left_corner, horizontal, vertical, origin);
+  render<<<blocks, threads>>>(fb, image_width, image_height, lower_left_corner, horizontal, vertical, origin, d_world);
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
   stop = clock();
@@ -106,5 +124,10 @@ int main() {
     }
   }
 
+  checkCudaErrors(cudaDeviceSynchronize());
+  free_world<<<1, 1>>>(d_list, d_world);
+  checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaFree(d_list));
+  checkCudaErrors(cudaFree(d_world));
   checkCudaErrors(cudaFree(fb));
 }
