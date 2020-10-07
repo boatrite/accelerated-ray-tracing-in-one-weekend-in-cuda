@@ -16,14 +16,14 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
 
 __device__ float hit_sphere(const point3& center, double radius, const ray& r) {
   vec3 oc = r.origin() - center;
-  auto a = dot(r.direction(), r.direction());
-  auto b = 2.0f * dot(oc, r.direction());
-  auto c = dot(oc, oc) - radius*radius;
-  auto disc = b*b - 4.0f*a*c;
+  auto a = r.direction().length_squared();
+  auto half_b = dot(oc, r.direction());
+  auto c = oc.length_squared() - radius*radius;
+  auto disc = half_b*half_b - a*c;
   if (disc < 0) {
     return -1.0f;
   } else {
-    return (-b - sqrt(disc)) / (2.0f * a);
+    return (-half_b - sqrt(disc)) / a;
   }
 }
 
