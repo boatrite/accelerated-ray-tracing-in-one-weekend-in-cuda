@@ -48,7 +48,7 @@ __device__ void write_color(vec3 *fb, int pixel_index, color pixel_color, int sa
   fb[pixel_index] = pixel_color;
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin, hittable **world, camera **cam, curandState *rand_state) {
+__global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, hittable **world, camera **cam, curandState *rand_state) {
   int i = threadIdx.x + blockIdx.x * blockDim.x;
   int j = threadIdx.y + blockIdx.y * blockDim.y;
   if((i >= max_x) || (j >= max_y)) return;
@@ -59,7 +59,6 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, ve
   for (int s = 0; s < samples_per_pixel; ++s) {
     float u = float(i + random_float(&local_rand_state)) / float(max_x-1);
     float v = float(j + random_float(&local_rand_state)) / float(max_y-1);
-    // ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
     ray r = (*cam)->get_ray(u, v, &local_rand_state);
     pixel_color += ray_color(r, world);
   }
@@ -95,15 +94,6 @@ int main() {
   const int image_width = 400;
   const int image_height = static_cast<int>(image_width / aspect_ratio);
   const int samples_per_pixel = 100;
-
-  float viewport_height = 2.0f;
-  float viewport_width = aspect_ratio * viewport_height;
-  float focal_length = 1.0f;
-
-  auto origin = point3(0.0f, 0.0f, 0.0f);
-  auto horizontal = vec3(viewport_width, 0.0f, 0.0f);
-  auto vertical = vec3(0.0f, viewport_height, 0.0f);
-  auto lower_left_corner = origin - horizontal/2.0f - vertical/2.0f - vec3(0.0f, 0.0f, focal_length);
 
   int tx = 8;
   int ty = 8;
@@ -143,7 +133,7 @@ int main() {
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
 
-  render<<<blocks, threads>>>(fb, image_width, image_height, samples_per_pixel, lower_left_corner, horizontal, vertical, origin, d_world, d_camera, d_rand_state);
+  render<<<blocks, threads>>>(fb, image_width, image_height, samples_per_pixel, d_world, d_camera, d_rand_state);
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
 
