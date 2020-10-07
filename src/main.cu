@@ -1,5 +1,6 @@
 #include <iostream>
 #include <time.h>
+#include <curand_kernel.h>
 
 #include "common.cuh"
 #include "hittable.cuh"
@@ -28,16 +29,39 @@ __device__ vec3 ray_color(const ray& r, hittable **world) {
   return (1.0f - t)*color(1.0, 1.0, 1.0) + t*color(0.5, 0.7, 1.0);
 }
 
-__global__ void render(vec3 *fb, int max_x, int max_y, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin, hittable **world) {
+__global__ void render_init(int max_x, int max_y, curandState *rand_state) {
   int i = threadIdx.x + blockIdx.x * blockDim.x;
   int j = threadIdx.y + blockIdx.y * blockDim.y;
   if((i >= max_x) || (j >= max_y)) return;
   int pixel_index = j*max_x + i;
+  // Each thread gets same seed, a different sequence number, no offset
+  curand_init(1984, pixel_index, 0, &rand_state[pixel_index]);
+}
 
-  float u = float(i) / float(max_x);
-  float v = float(j) / float(max_y);
-  ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
-  fb[pixel_index] = ray_color(r, world);
+__device__ void write_color(vec3 *fb, int pixel_index, color pixel_color, int samples_per_pixel) {
+  // Divide the color by the number of samples
+  auto scale = 1.0f / samples_per_pixel;
+  pixel_color *= scale;
+
+  fb[pixel_index] = pixel_color;
+}
+
+__global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, vec3 lower_left_corner, vec3 horizontal, vec3 vertical, vec3 origin, hittable **world, curandState *rand_state) {
+  int i = threadIdx.x + blockIdx.x * blockDim.x;
+  int j = threadIdx.y + blockIdx.y * blockDim.y;
+  if((i >= max_x) || (j >= max_y)) return;
+  int pixel_index = j*max_x + i;
+  curandState local_rand_state = rand_state[pixel_index];
+
+  color pixel_color(0,0,0);
+  for (int s = 0; s < samples_per_pixel; ++s) {
+    float u = float(i + curand_uniform(&local_rand_state)) / float(max_x-1);
+    float v = float(j + curand_uniform(&local_rand_state)) / float(max_y-1);
+    ray r(origin, lower_left_corner + u*horizontal + v*vertical - origin);
+    pixel_color += ray_color(r, world);
+  }
+
+  write_color(fb, pixel_index, pixel_color, samples_per_pixel);
 }
 
 __global__ void create_world(hittable **d_list, hittable **d_world) {
@@ -59,6 +83,7 @@ int main() {
   const float aspect_ratio = 16.0f / 9.0f;
   const int image_width = 400;
   const int image_height = static_cast<int>(image_width / aspect_ratio);
+  const int samples_per_pixel = 100;
 
   // Camera
   float viewport_height = 2.0f;
@@ -69,12 +94,6 @@ int main() {
   auto horizontal = vec3(viewport_width, 0.0f, 0.0f);
   auto vertical = vec3(0.0f, viewport_height, 0.0f);
   auto lower_left_corner = origin - horizontal/2.0f - vertical/2.0f - vec3(0.0f, 0.0f, focal_length);
-
-  // World
-  // hittable_list world;
-  // world.add(make_shared<sphere>(point3(0, 0, -1), 0.5));
-  // world.add(make_shared<sphere>(point3(0, -100.5, -1), 100));
-  shared_ptr<sphere> my_sphere = make_shared<sphere>(point3(0, 0, -1), 0.5);
 
   int tx = 8;
   int ty = 8;
@@ -89,6 +108,7 @@ int main() {
   vec3 *fb;
   checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
+  // World
   hittable **d_list;
   checkCudaErrors(cudaMalloc((void **)&d_list, 2*sizeof(hittable *)));
   hittable **d_world;
@@ -97,14 +117,24 @@ int main() {
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
 
+  // Rand
+  curandState *d_rand_state;
+  checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
+
   clock_t start, stop;
   start = clock();
   // Render our buffer
   dim3 blocks(image_width/tx+1,image_height/ty+1);
   dim3 threads(tx,ty);
-  render<<<blocks, threads>>>(fb, image_width, image_height, lower_left_corner, horizontal, vertical, origin, d_world);
+
+  render_init<<<blocks, threads>>>(image_width, image_height, d_rand_state);
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
+
+  render<<<blocks, threads>>>(fb, image_width, image_height, samples_per_pixel, lower_left_corner, horizontal, vertical, origin, d_world, d_rand_state);
+  checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaDeviceSynchronize());
+
   stop = clock();
   double timer_seconds = ((double)(stop - start)) / CLOCKS_PER_SEC;
   std::cerr << "took " << timer_seconds << " seconds.\n";

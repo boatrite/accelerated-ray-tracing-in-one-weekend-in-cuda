@@ -20,7 +20,7 @@ inline double degrees_to_radians(double degrees) {
   return degrees * pi / 180.0;
 }
 
-inline double clamp(double x, double min, double max) {
+__device__ inline double clamp(float x, float min, float max) {
   if (x < min) return min;
   if (x > max) return max;
   return x;
