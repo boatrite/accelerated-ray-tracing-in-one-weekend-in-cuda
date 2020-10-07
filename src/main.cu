@@ -82,15 +82,42 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, hi
   write_color(fb, pixel_index, pixel_color, samples_per_pixel);
 }
 
-__global__ void create_world(hittable **d_list, hittable **d_world, const float aspect_ratio, camera **d_camera) {
+__global__ void create_world(hittable **d_list, hittable **d_world, const float aspect_ratio, camera **d_camera, curandState *rand_state) {
   if (threadIdx.x == 0 && blockIdx.x == 0) {
-    d_list[0] = new sphere(vec3(0,0,-1), 0.5, new lambertian(color(0.8, 0.3, 0.3)));
-    d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(color(0.8, 0.8, 0.0)));
-    d_list[2] = new sphere(vec3(-1,0,-1), 0.5, new dielectric(1.5f));
-    d_list[3] = new sphere(vec3(-1,0,-1), -0.4, new dielectric(1.5f));
-    d_list[4] = new sphere(vec3(1,0,-1), 0.5, new metal(color(0.8, 0.6, 0.2), 0));
+    int d_list_counter = 0;
 
-    *d_world = new hittable_list(d_list, 5);
+    d_list[d_list_counter++] = new sphere(vec3(0,-1000,0), 1000, new lambertian(color(0.5, 0.5, 0.5)));
+
+    for (int a = -11; a < 11; a++) {
+      for (int b = -11; b < 11; b++) {
+        auto choose_mat = random_float(rand_state);
+        point3 center(a + 0.9 * random_float(rand_state), 0.2, b + 0.9 * random_float(rand_state));
+
+        if ((center - point3(4, 0.2, 0)).length() > 0.9) {
+          if (choose_mat < 0.8f) {
+            // diffuse
+            color albedo = color::random(rand_state) * color::random(rand_state);
+            d_list[d_list_counter++] = new sphere(center, 0.2, new lambertian(albedo));
+          } else if (choose_mat < 0.95f) {
+            // metal
+            auto albedo = color::random(rand_state, 0.5, 1);
+            auto fuzz = random_float(rand_state, 0, 0.5);
+            d_list[d_list_counter] = new sphere(center, 0.2, new metal(albedo, fuzz));
+            d_list_counter++;
+          } else {
+            // glass
+            d_list[d_list_counter] = new sphere(center, 0.2, new dielectric(1.5));
+            d_list_counter++;
+          }
+        }
+      }
+    }
+
+    d_list[d_list_counter++] = new sphere(point3(0, 1, 0), 1.0, new dielectric(1.5));
+    d_list[d_list_counter++] = new sphere(point3(-4, 1, 0), 1.0, new lambertian(color(0.4, 0.2, 0.1)));
+    d_list[d_list_counter++] = new sphere(point3(4, 1, 0), 1.0, new metal(color(0.7, 0.6, 0.5), 0.0));
+
+    *d_world = new hittable_list(d_list, d_list_counter);
 
     point3 lookfrom(13, 2, 3);
     point3 lookat(0,0,0);
@@ -110,16 +137,22 @@ __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_cam
 
 int main() {
   // Image
-  const float aspect_ratio = 16.0f / 9.0f;
-  const int image_width = 400;
+  const float aspect_ratio = 3.0f / 2.0f;
+  const int image_width = 1200;
   const int image_height = static_cast<int>(image_width / aspect_ratio);
-  const int samples_per_pixel = 100;
+  const int samples_per_pixel = 500;
 
-  int tx = 8;
-  int ty = 8;
+  int tx = 22;
+  int ty = 22;
+
+  clock_t start, stop;
+  start = clock();
 
   std::cerr << "Rendering a " << image_width << "x" << image_height << " image ";
   std::cerr << "in " << tx << "x" << ty << " blocks.\n";
+
+  dim3 blocks(image_width/tx+1,image_height/ty+1);
+  dim3 threads(tx,ty);
 
   // allocate FB
   int num_pixels = image_width*image_height;
@@ -127,29 +160,22 @@ int main() {
   vec3 *fb;
   checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
 
-  // World
-  hittable **d_list;
-  checkCudaErrors(cudaMalloc((void **)&d_list, 2*sizeof(hittable *)));
-  hittable **d_world;
-  checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
-  camera **d_camera;
-  checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-  create_world<<<1,1>>>(d_list, d_world, aspect_ratio, d_camera);
-  checkCudaErrors(cudaGetLastError());
-  checkCudaErrors(cudaDeviceSynchronize());
-
   // Rand
   curandState *d_rand_state;
   checkCudaErrors(cudaMalloc((void **)&d_rand_state, num_pixels*sizeof(curandState)));
 
-  clock_t start, stop;
-  start = clock();
-
-  // Render our buffer
-  dim3 blocks(image_width/tx+1,image_height/ty+1);
-  dim3 threads(tx,ty);
-
   render_init<<<blocks, threads>>>(image_width, image_height, d_rand_state);
+  checkCudaErrors(cudaGetLastError());
+  checkCudaErrors(cudaDeviceSynchronize());
+
+  // World
+  hittable **d_list;
+  checkCudaErrors(cudaMalloc((void **)&d_list, 488*sizeof(hittable *)));
+  hittable **d_world;
+  checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
+  camera **d_camera;
+  checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
+  create_world<<<1,1>>>(d_list, d_world, aspect_ratio, d_camera, d_rand_state);
   checkCudaErrors(cudaGetLastError());
   checkCudaErrors(cudaDeviceSynchronize());
 
