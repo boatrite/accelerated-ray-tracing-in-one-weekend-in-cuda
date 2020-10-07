@@ -20,15 +20,23 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
   }
 }
 
-__device__ vec3 ray_color(const ray& r, hittable **world) {
-  hit_record rec;
-  if ((*world)->hit(r, 0, infinity, rec)) {
-    return 0.5f * (rec.normal + color(1,1,1));
+__device__ vec3 ray_color(const ray& r, hittable **world, curandState *rand_state) {
+  ray cur_ray = r;
+  float cur_attenuation = 1.0f;
+  for (int i = 0; i < 50; i++) {
+    hit_record rec;
+    if ((*world)->hit(cur_ray, 0.001f, infinity, rec)) {
+      point3 target = rec.p + rec.normal + random_in_unit_sphere(rand_state);
+      cur_attenuation *= 0.5f;
+      cur_ray = ray(rec.p, target-rec.p);
+    } else {
+      vec3 unit_direction = unit_vector(cur_ray.direction());
+      float t = 0.5f * (unit_direction.y() + 1.0f);
+      color c = (1.0f - t)*color(1.0, 1.0, 1.0) + t*color(0.5, 0.7, 1.0);
+      return cur_attenuation * c;
+    }
   }
-
-  vec3 unit_direction = unit_vector(r.direction());
-  auto t = 0.5f * (unit_direction.y() + 1.0f);
-  return (1.0f - t)*color(1.0, 1.0, 1.0) + t*color(0.5, 0.7, 1.0);
+  return vec3(0.0, 0.0, 0.0);
 }
 
 __global__ void render_init(int max_x, int max_y, curandState *rand_state) {
@@ -60,7 +68,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, hi
     float u = float(i + random_float(&local_rand_state)) / float(max_x-1);
     float v = float(j + random_float(&local_rand_state)) / float(max_y-1);
     ray r = (*cam)->get_ray(u, v, &local_rand_state);
-    pixel_color += ray_color(r, world);
+    pixel_color += ray_color(r, world, &local_rand_state);
   }
 
   write_color(fb, pixel_index, pixel_color, samples_per_pixel);
