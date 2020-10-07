@@ -4,6 +4,7 @@
 
 #include "common.cuh"
 
+#include "material.cuh"
 #include "camera.cuh"
 #include "hittable.cuh"
 #include "hittable_list.cuh"
@@ -22,13 +23,18 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
 
 __device__ vec3 ray_color(const ray& r, hittable **world, curandState *rand_state) {
   ray cur_ray = r;
-  float cur_attenuation = 1.0f;
+  color cur_attenuation = vec3(1.0, 1.0, 1.0);
   for (int i = 0; i < 50; i++) {
     hit_record rec;
     if ((*world)->hit(cur_ray, 0.001f, infinity, rec)) {
-      point3 target = rec.p + rec.normal + random_unit_vector(rand_state);
-      cur_attenuation *= 0.5f;
-      cur_ray = ray(rec.p, target-rec.p);
+      ray scattered;
+      color attenuation;
+      if (rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, rand_state, LightingType::true_lambertian)) {
+        cur_attenuation *= attenuation;
+        cur_ray = scattered;
+      } else {
+        return vec3(0.0, 0.0, 0.0);
+      }
     } else {
       vec3 unit_direction = unit_vector(cur_ray.direction());
       float t = 0.5f * (unit_direction.y() + 1.0f);
@@ -78,9 +84,10 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int samples_per_pixel, hi
 
 __global__ void create_world(hittable **d_list, hittable **d_world, const float aspect_ratio, camera **d_camera) {
   if (threadIdx.x == 0 && blockIdx.x == 0) {
-    *(d_list)   = new sphere(vec3(0,0,-1), 0.5);
-    *(d_list+1) = new sphere(vec3(0,-100.5,-1), 100);
-    *d_world    = new hittable_list(d_list, 2);
+    d_list[0] = new sphere(vec3(0,0,-1), 0.5, new lambertian(color(0.8, 0.3, 0.3)));
+    d_list[1] = new sphere(vec3(0,-100.5,-1), 100, new lambertian(color(0.8, 0.8, 0.0)));
+
+    *d_world = new hittable_list(d_list, 2);
 
     point3 lookfrom(13, 2, 3);
     point3 lookat(0,0,0);

@@ -1,10 +1,14 @@
 #ifndef HITTABLE_H
 #define HITTABLE_H
-#include "ray.cuh"
+
+#include "common.cuh"
+
+class material;
 
 struct hit_record {
   point3 p;
   vec3 normal;
+  material *mat_ptr;
   float t;
   bool front_face;
 
